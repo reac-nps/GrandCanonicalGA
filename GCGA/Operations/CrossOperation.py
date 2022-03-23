@@ -1,35 +1,20 @@
-from asyncio import constants
-from typing import List
+
 import numpy as np
-from ase import Atom, Atoms
-from ase.data import atomic_numbers
-from ase.ga.cutandsplicepairing import Positions
-from ase.geometry import find_mic
-from ase.ga.utilities import (closest_distances_generator, get_all_atom_types,atoms_too_close, atoms_too_close_two_sets)
-class CrossOperation:
+from ase import Atoms
+from ase.ga.utilities import atoms_too_close
+
+from .OperationsBase import OperationsBase
+class CrossOperation(OperationsBase):
     """
     Modified cross operation found in the Atomic Simulation Environment (ASE) GA package. ga.cutandspliceparing.py
     Modified in order to allow the cut and splice pairing to happen between neighboring stoichiometries
     """
     def __init__(self, slab,constant,variable,variable_range,ratio_of_covalent_radii=0.7,
-                minfrac = None,rng=np.random,stc_change_chance = 0.1):
-        self.slab = slab
-        self.constant = self.__get_atoms_object(constant)
-        self.variable = self.__get_atoms_object(variable)
-        self.variable_number = self.variable.numbers[0]
-        self.variable_range = self.__get_range(variable_range)
-        self.ratio_of_covalent_radii = ratio_of_covalent_radii
-        self.stc_change_chance = stc_change_chance
-        self.rng = rng
+                rng=np.random,stc_change_chance = 0.1,minfrac = None,):
+        super().__init__(slab,constant,variable,variable_range,ratio_of_covalent_radii,rng)
+ 
         self.minfrac = self.__get_minfrac(minfrac)
-
-        uniques = self.constant.copy()
-        uniques.extend(self.variable)
-            
-        unique_atom_types = get_all_atom_types(self.slab, uniques.numbers)
-
-        self.blmin = closest_distances_generator(atom_numbers=unique_atom_types,
-                                    ratio_of_covalent_radii=self.ratio_of_covalent_radii)
+        self.stc_change_chance = stc_change_chance
 
 
     def cross(self, a1, a2):
@@ -94,34 +79,19 @@ class CrossOperation:
                 continue
             if(not self.mantains_ordering(atoms)):
                 continue
-            if(self.__get_var_stc(atoms) not in self.variable_range):
-                continue
             # Passed all the tests
             atoms.wrap()
-            var_stc = self.__get_var_stc(atoms)
-            if(self.__get_var_stc(atoms) not in self.variable_range):
+            var_stc = self.get_var_stc(atoms)
+            if(var_stc not in self.variable_range):
                 continue
             if(var_stc != allowed_stc1 and var_stc != allowed_stc2):
                 if(self.rng.rand() > self.stc_change_chance):
                     continue
         
-            atoms.info['stc']= self.__get_var_stc(atoms)
+            atoms.info['stc']= self.get_var_stc(atoms)
             return atoms
 
         return None
-
-    def mantains_ordering(self,atoms):
-        try:
-            for i in range(len(self.slab)):
-                if(atoms[i].symbol != self.slab[i].symbol):
-                    print("Eror in ordering")
-                    return False
-            for i in range(len(self.constant)):
-                if(atoms[len(self.slab)+i].symbol != self.constant[i].symbol):
-                    return False
-        except:
-            return False
-        return True
 
 
     def get_pairing(self,a1,a2,cutting_point, cutting_normal):
@@ -176,37 +146,7 @@ class CrossOperation:
                         atom.number = 200
                         has_been_added = True
         atoms_result.wrap()
-        return atoms_result
-        
-
-    def __get_var_stc(self,atoms) -> int:
-        var_stc = len(atoms)-len(self.slab)-len(self.constant)
-        if(var_stc >= 0 ):
-            for i in atoms[(len(self.slab)+len(self.constant)):len(atoms)]:
-                if(i.symbol != self.variable[0].symbol):
-                    raise Exception("Variable type of atoms does not match stored type")
-        else:
-            raise Exception("Negative numer of variable atoms")
-        return var_stc
-    def __get_range(self,variable_range) -> List[int]:
-        if isinstance(variable_range,List) and isinstance(variable_range[0],int):
-            return variable_range
-        else:
-            raise Exception("variable_ range is not al ist of integers")
-
-    def __get_atoms_object(self,atoms) -> Atoms:
-        "Gets an atoms object based on user input"
-        if isinstance(atoms, Atoms):
-            return atoms
-        elif isinstance(atoms, str):
-            return Atoms(atoms)
-        elif isinstance(atoms,List):
-            for i in atoms:
-                if(i not in atomic_numbers.values()):
-                    raise ValueError('Cannot parse this element {} in :'.format(i),atoms )
-            return Atoms(numbers=atoms)
-        else:
-            raise ValueError('Cannot parse this element:', atoms)
+        return atoms_result 
 
     def __get_minfrac(self,minfrac):
         if minfrac is not None:
