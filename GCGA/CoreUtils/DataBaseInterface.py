@@ -25,8 +25,9 @@ class DataBaseInterface:
                 atoms.info['key_value_pairs']['dbid']
         except KeyError:
             raise Exception("No dbid Parameter found in fetched atoms")
-
-    def update_to_relaxed(self, dbid, atoms):
+    
+        
+    def update_to_relaxed(self, atoms):
         try:
             atoms.info['key_value_pairs']['dbid']
         except:
@@ -35,15 +36,20 @@ class DataBaseInterface:
             atoms.info['key_value_pairs']['var_stc']
         except KeyError:
             raise Exception("No var_stc Parameter found in fetched atoms")
-        if(dbid != atoms.info['key_value_pairs']['dbid']):
-            raise Exception("Atoms object dbid and database dbid do not coincide")
         try:
             atoms.info['key_value_pairs']['raw_score']
         except KeyError:
            raise Exception("Relaxed candidate does not have raw_score")
 
-        self.db.update(dbid,atoms=atoms,relaxed = True,raw_score = atoms.info['key_value_pairs']['raw_score'])
-
+        self.db.update(atoms.info['key_value_pairs']['dbid'],atoms=atoms,relaxed = True,raw_score = atoms.info['key_value_pairs']['raw_score'],parent_penalty = 0)
+    def update_penalization(self,atoms):
+        try:
+            atoms.info['key_value_pairs']['dbid']
+        except:
+            raise Exception("No atoms object was not included in database before")
+        dbid = atoms.info['key_value_pairs']['dbid']
+        self.db.update(dbid,parent_penalty = atoms.info['key_value_pairs']['parent_penalty'] + 1)
+        
     "THIS NEEDS FIXING"
     def get_atoms_from_id(self,dbid):
         try:
@@ -51,11 +57,11 @@ class DataBaseInterface:
         except:
             raise Exception("No atoms with that dbid")
         try:
-                atoms.info['key_value_pairs']['dbid']
+            atoms.info['key_value_pairs']['dbid']
         except KeyError:
             raise Exception("No dbid Parameter found in fetched atoms")
         try:
-                atoms.info['key_value_pairs']['var_stc']
+            atoms.info['key_value_pairs']['var_stc']
         except KeyError:
             raise Exception("No var_stc Parameter found in fetched atoms")
         return atoms
@@ -89,25 +95,72 @@ class DataBaseInterface:
             try:
                 at.info['key_value_pairs']['dbid']
             except KeyError:
-                raise Exception("No dbid Parameter found in fetched atoms")
+                raise Exception("No dbid parameter found in fetched atoms")
             try:
                 at.info['key_value_pairs']['var_stc']
             except KeyError:
-                raise Exception("No var_stc Parameter found in fetched atoms")
+                raise Exception("No var_stc parameter found in fetched atoms")
             try:
                 at.info['key_value_pairs']['raw_score']
             except KeyError:
-                raise Exception("No var_stc Parameter found in fetched atoms")
+                raise Exception("No var_stc parameter found in fetched atoms")
 
             atoms.append(at)
         return list(atoms)
     
-    def get_better_candidates(self,n=1):
+    def get_better_candidates(self,n=1,max=False):
 
         atoms = self.get_relaxed_candidates()
         atoms.sort(key=lambda x: x.info['key_value_pairs']['raw_score'],reverse = True)
 
-        return list(atoms[:n])
+        if max == False:
+            if(len(atoms)>n):
+                return list(atoms[:n])
+            else:
+                return list(atoms[:len(atoms)-1])
+        else:
+            return list(atoms[:len(atoms)-1])
+
+    def get_better_candidates_weighted(self,n=1,wt_strength = 1.0):
+
+        atoms = self.get_relaxed_candidates()
+        wt = {}
+        for a in atoms:
+            wt[a.info['key_value_pairs']['var_stc']] = 0
+        wt['total'] = 0
+        for a in atoms:
+            wt[a.info['key_value_pairs']['var_stc']] += 1
+            wt['total'] +=1
+            
+        if(wt['total'] > 0):
+            atoms.sort(key=lambda x: (x.info['key_value_pairs']['raw_score'] * wt_strength *( 1.0-(wt[x.info['key_value_pairs']['var_stc']] / wt['total']))),reverse = True)
+        else:
+            atoms.sort(key=lambda x: x.info['key_value_pairs']['raw_score'],reverse = True)
+        if(len(atoms)>n):
+            return list(atoms[:n])
+        else:
+            return list(atoms[:len(atoms)-1])
+
+    def get_better_candidates_weighted_penalized(self,n=1,wt_strength = 1.0,penalty_strength=1.0):
+
+        atoms = self.get_relaxed_candidates()
+        wt = {}
+        for a in atoms:
+            wt[a.info['key_value_pairs']['var_stc']] = 0
+        wt['total'] = 0
+        for a in atoms:
+            wt[a.info['key_value_pairs']['var_stc']] += 1
+            wt['total'] +=1
+            
+        if(wt['total'] > 0):
+            atoms.sort(key=lambda x: (x.info['key_value_pairs']['raw_score'] * wt_strength *( 1.0-(wt[x.info['key_value_pairs']['var_stc']] / wt['total'])) *
+                penalty_strength * -x.info['key_value_pairs']['parent_penalty']),reverse = True)
+        else:
+            atoms.sort(key=lambda x: x.info['key_value_pairs']['raw_score'],reverse = True)
+        if(len(atoms)>n):
+            return list(atoms[:n])
+        else:
+            return list(atoms[:len(atoms)-1])
 
     def __get_db_name(self,db_name):
         if Path(db_name ).is_file():

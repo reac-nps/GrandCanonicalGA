@@ -1,154 +1,83 @@
 #Import these for the GA code to run
-from GCGA.CoreUtils.StartingCandidateGenerator import StartingCandidateGenerator as SCG
-from GCGA.CoreUtils.DataBaseInterface import DataBaseInterface as DBI
+
+from GCGA.CoreUtils.GCGA import GCGA
 from GCGA.Operations.CrossOperation import CrossOperation as CO
+from GCGA.Operations.OperationsBase import OperationsBase
+from GCGA.Operations.RandomCandidateGenerator import RandomCandidateGenerator as RCG
 from GCGA.Operations.AddOperation import AddOperation as AD
 from GCGA.Operations.RemoveOperation import RemoveOperation as RM
 from GCGA.Operations.PermutationOperation import PermutationOperation as PM
+from GCGA.Operations.RattleOperation import RattleOperation as RT
 
 from ase import Atoms
 import numpy as np
 ###########################
-from ase.io import read,write
+from ase.io import read
 #Calculator
 from ase.optimize import BFGS
 from ase.calculators.emt import EMT
 
-#--------------------------Define the fitness fucntion for your atoms-----------------------"
+#Define the fitness fucntion for your atoms it must take in an atoms object as parameter and return a float for the code to work"
 
-def fitness_function(atoms,env,reference = 0.0,au_energy = 0.0)-> float:
+def fitness_function(atoms)-> float:
+    env = 1.0
+    ref=read('pt.traj@:')[0].get_potential_energy()    
 
+    au_en =read('gold_bulk.traj').get_potential_energy() / 500.0
     at_num= atoms.get_atomic_numbers()
     pt_num = np.count_nonzero(at_num == 78)
     au_num= np.count_nonzero(at_num == 79)
 
-    fre = atoms.get_potential_energy() - reference - au_num * (au_energy) - au_num*env
-    return fre
+    fre = atoms.get_potential_energy() - ref- au_num * (au_en) - au_num*env
 
-#---------------------------Generate static part of the system------------------------------"
-a = 12.0
+    return -fre
+
+
+
+#Indicate static part of the system"
+a = 24.0
 slab = Atoms(cell=[a,a,a],
              pbc=True)
 
 #If slab atoms arent fixed they will be generated  for all structures, but will be relaxed!"
 
-#---------------------------Generate constant part of the system------------------------------"
-#Part of the system that can be relaxed but that does not vary in number over the duration of the search"
-constant = Atoms('Pt1')
-
-#---------Generate variable part of the system-(Single atom types only)------------------"
+#---------Generate variable part of the system----------------------"
 #Part of the system that can be relaxed and that varyies in number over the duration of the search"
-#
-variable_type = Atoms('Au')
-#Considered number of variable type atoms n the search"
-variable_range = [1,2,3,4,5,7,8,9,10]
-variable_range_test = [1,2,3,4,5,7,8,9,10,11]
+variable_types = [Atoms('Pt'),Atoms('Au')]
+variable_range = [[1],[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20]]
 
-#---------------------------Define starting population--------------------------------"
+#Indicate mutations to be performed during the run. They can be passes as an instantiated class, as a type or as a string,
+# If passed as type or string, they will be instantiated with default values. A more precisse fine tuning of the run requeres the classes to be preinstantiated when
+#  passed into rhe GCGA object"
+candidateGenerator = RCG(slab,variable_types,variable_range)
+crossing = CO(slab,variable_types,variable_range,minfrac = 0.2)
+adding = AD(slab,variable_types,variable_range)
+removing = RM(slab,variable_types,variable_range)
+permutating = PM(slab,variable_types,variable_range)
+rattling = RT(slab,variable_types,variable_range,n_to_move= 2,rattle_strength=0.1)
 
-candidateGenerator = SCG(slab,constant,variable_type,variable_range)
-crossing = CO(slab,constant,variable_type,variable_range,stc_change_chance = 0.5)
-adding = AD(slab,constant,variable_type,variable_range_test)
-removing = RM(slab,constant,variable_type,variable_range)
-permutating = PM(slab,constant,variable_type,variable_range)
+# 
+# Once instantiated, they have to be added to a tuple. A second tuple containing the chances of occurrence of each mutation if the crossing fails
+# (Ideally, the sum of mutations must be equal to 1.0)
+# The crossing can also be passed as a complimentary mutation, although its called independently during the execution.
+#Supported mutations are  "random", "cross", "add", "remove", "permute" and "rattle"
+# The types can be passed as:
+"""from GCGA.Operations.CrossOperation import CrossOperation as CO
+from GCGA.Operations.OperationsBase import OperationsBase
+from GCGA.Operations.RandomCandidateGenerator import RandomCandidateGenerator as RCG
+from GCGA.Operations.AddOperation import AddOperation as AD
+from GCGA.Operations.RemoveOperation import RemoveOperation as RM
+from GCGA.Operations.PermutationOperation import PermutationOperation as PM
+from GCGA.Operations.RattleOperation import RattleOperation as RT
+"""
 
-db = DBI('databaseGA.db')
-population = 25
+mutations = [crossing,candidateGenerator,AD,removing,"permute",rattling]
+chances = [0.3,0.2,0.1,0.2,0.1,0.1]
 
-starting_pop = candidateGenerator.get_starting_population(population_size=population)
+#Instantiating of the GCGA object with the selected parameters
+gcga = GCGA(EMT(),slab,variable_types,variable_range,mutations,chances,fitness_function,steps= 10000)
 
-#-----------------------------------Define Calculator----------------------------------------"
+#Calling the run function will initialize the run
+gcga.run()
 
-calc = EMT()
-
-#Get Reference energies##########
-constant.cell = slab.get_cell()
-variable_type.cell = slab.get_cell()
-
-constant.calc = calc
-dyn = BFGS(constant)
-dyn.run(steps=100, fmax=0.05)
-ref = constant.get_potential_energy()
-
-variable_type.calc = calc
-dyn = BFGS(variable_type)
-dyn.run(steps=100, fmax=0.05)
-au_en = variable_type.get_potential_energy()
-
-#####################################
-
-
-
-for i in starting_pop:
-    db.add_unrelaxed_candidate(i )
-
-#---------------------------------Relax initial structures-----------------------------------"
-env = -0.5 #Environment chem pot 
-while db.get_number_of_unrelaxed_candidates() > 0:
-
-    atoms = db.get_first_unrelaxed()
-    
-    atoms.calc = calc
-    dyn = BFGS(atoms)
-    dyn.run(steps=100, fmax=0.05)
-    atoms.get_potential_energy()
-    
-    atoms.info['key_value_pairs']['raw_score'] = -fitness_function(atoms,env,reference = ref, au_energy = au_en)
-   
-    db.update_to_relaxed(atoms.info['key_value_pairs']['dbid'],atoms)
-
-#--------------------------------------Find better stoich to srtart eval----------------------------
-#Overall fitness value
-steps = 10
-sub_steps = 20
-for i in range(steps):
-    for j in range(sub_steps):
-        atomslist = db.get_better_candidates(n=10)
-        #Choose two of the most stable structures to pair
-        cand1 = np.random.randint(0,10)
-        cand2 = np.random.randint(0,10)
-        while cand1 == cand2:
-            cand2 = np.random.randint(0,10)
-            
-        #Mate the particles
-        res  = crossing.cross(atomslist[cand1],atomslist[cand2])
-        if(res is not None):
-            db.add_unrelaxed_candidate(res)
-            
-    
-    while db.get_number_of_unrelaxed_candidates() > 0:
-
-        atoms = db.get_first_unrelaxed()
-
-        atoms.calc = calc
-        dyn = BFGS(atoms)
-        dyn.run(steps=100, fmax=0.05)
-        atoms.get_potential_energy()
-
-        atoms.info['key_value_pairs']['raw_score'] = -fitness_function(atoms,env,reference = ref, au_energy = au_en)
-
-        db.update_to_relaxed(atoms.info['key_value_pairs']['dbid'],atoms)
-        
-atomslist = db.get_better_candidates(n=2)
-
-print(len(atomslist[0]))
-cand = removing.remove(atomslist[0])
-print(len(cand))
-write('rm.traj',[atomslist[0],cand])
-
-atomslist = db.get_better_candidates(n=2)
-
-print(len(atomslist[0]))
-cand = adding.add(atomslist[0],atomslist[1])
-print(len(cand))
-write('add.traj',[atomslist[0],cand])
-
-atomslist = db.get_better_candidates(n=2)
-
-print(len(atomslist[0].numbers))
-print(atomslist[0].numbers)
-cand2 = permutating.permutate(atomslist[0])
-print(len(cand2.numbers))
-print(cand2.numbers)
-write('pm.traj',[atomslist[0],cand2])
 
