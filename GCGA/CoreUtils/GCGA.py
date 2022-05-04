@@ -1,7 +1,5 @@
-from typing_extensions import Self
-from ase import Atom, Atoms
+from struct import calcsize
 from GCGA.CoreUtils.DataBaseInterface import DataBaseInterface as DBI
-from GCGA.Operations.OperationsBase import OperationsBase
 from GCGA.Operations.RandomCandidateGenerator import RandomCandidateGenerator as RCG
 from GCGA.Operations.CrossOperation import CrossOperation as CO
 from GCGA.Operations.AddOperation import AddOperation as AD
@@ -10,21 +8,26 @@ from GCGA.Operations.PermutationOperation import PermutationOperation as PM
 from GCGA.Operations.RattleOperation import RattleOperation as RT
 
 import numpy as np
-from ase.io import write
+from ase.io import write, Trajectory
+from os import path
 
+"Supported calculators"
+from ase.calculators.singlepoint import SinglePointCalculator
 from ase.optimize import BFGS
 from ase.calculators.emt import EMT
+from ase.calculators.lammpslib import LAMMPSlib
+
 
 class GCGA:
 
-    def __init__(self,calculator, slab,atomic_types,atomic_ranges,mutation_operations
-                ,mutation_chances,fitness_function,
+    def __init__(self, slab,atomic_types,atomic_ranges,mutation_operations,
+                mutation_chances,fitness_function,
                 structures_filename = 'structures.traj',db_name = 'databaseGA.db',
                 starting_population = 20,population_size = 50,
-                stoichiometry_weight = 1.0,penalty_strength = 0.0,
+                stoichiometry_weight = 1.0,penalty_strength = 0.0,calculator = EMT(),
                 initial_structure_generator = RCG, crossing_operator = CO, 
                 steps = 1000,maxtries = 10000,
-                write_while_running = True,write_size = 10000):
+                ):
         
         self.calc = calculator
         self.slab = slab
@@ -34,7 +37,17 @@ class GCGA:
         self.fitness_function = fitness_function
 
         self.db_name = db_name
-        self.filename = structures_filename
+
+        if isinstance(structures_filename, str):
+            self.filename = structures_filename
+            "This performs a hard overwrite, change it later in order to include restarts"
+            if path.exists(structures_filename):
+                self.trajfile = Trajectory(filename=structures_filename, mode='w')
+                self.trajfile.close()
+                self.trajfile = Trajectory(filename=structures_filename, mode='a')
+            else:
+                self.trajfile = Trajectory(filename=structures_filename, mode='a')
+        
 
         self.starting_population = starting_population
         self.population = population_size
@@ -46,9 +59,6 @@ class GCGA:
 
         self.steps = steps
         self.maxtries = max(steps*10,maxtries)
-
-        self.write_running = write_while_running
-        self.write_size = write_size
 
     def __initialize_crossing(self,crossing,ctype)-> object:
 
@@ -132,14 +142,12 @@ class GCGA:
 #---------------------------Define starting population--------------------------------"
         db = DBI(self.db_name)
 
-        calc = self.calc
         mutations = self.mutation_operations
         chances = self.mutation_chances
         population = self.starting_population
 
         #--------------------------------Generate initial population---------------------------------"
         starting_pop = self.initial_structure_generator.get_starting_population(population_size=population)
-
 
         for i in starting_pop:
             db.add_unrelaxed_candidate(i)
@@ -150,14 +158,12 @@ class GCGA:
 
             atoms = db.get_first_unrelaxed()
             
-            atoms.calc = calc
-            dyn = BFGS(atoms)
-            dyn.run(steps=100, fmax=0.05)
-            atoms.get_potential_energy()
-            
+            atoms = self.relax(atoms)
+
             atoms.info['key_value_pairs']['raw_score'] = self.fitness_function(atoms)
         
             db.update_to_relaxed(atoms)
+
 
         #--------------------------------------Find better stoich to srtart eval----------------------------
 
@@ -174,11 +180,11 @@ class GCGA:
             atomslist = db.get_better_candidates_weighted_penalized(n=self.population,wt_strength =self.wt,penalty_strength=self.pts )
             ranges = len(atomslist)
             #Choose two of the most stable structures to pair
-            cand1 = np.random.randint(0,ranges - 1)
-            cand2 = np.random.randint(0,ranges - 1)
+            cand1 = np.random.randint(ranges)
+            cand2 = np.random.randint(ranges)
             if(ranges >1):
                 while cand1 == cand2:
-                    cand2 = np.random.randint(0,ranges -1)
+                    cand2 = np.random.randint(ranges)
 
             #Mate the particles
                 res,mut  = self.crossing_operator.mutate(atomslist[cand1],atomslist[cand2])
@@ -199,7 +205,6 @@ class GCGA:
                         placeholder,mut = mutations[k].mutate(atomslist[cand1],atomslist[cand2])
                         if(placeholder is not None):
                             child = placeholder.copy()
-                            
                             permut = mut
                         if (rnd < chance and placeholder is not None):
                             break
@@ -214,23 +219,51 @@ class GCGA:
                             db.update_penalization(atomslist[cand2])
                         counter+=1
 
-
                 while db.get_number_of_unrelaxed_candidates() > 0:
 
                     atoms = db.get_first_unrelaxed()
-
-                    atoms.calc = calc
-                    dyn = BFGS(atoms)
-                    dyn.run(steps=100, fmax=0.05)
-                    atoms.get_potential_energy()
+                    atoms = self.relax(atoms)
 
                     atoms.info['key_value_pairs']['raw_score'] = self.fitness_function(atoms)
-
+                    
                     db.update_to_relaxed(atoms)
 
-                if(self.write_running):
-                    atomslist = db.get_better_candidates(n=self.write_size)
-                    write(self.filename,atomslist)
-
         atomslist = db.get_better_candidates(max=True)
-        write(self.filename,atomslist)
+
+        write("sorted_" + self.filename,atomslist)
+
+    def append_to_file(self,atoms):
+        if(self.trajfile is not None):
+            self.trajfile.write(atoms)
+
+    def relax(self,atoms):
+
+        results = None
+        if(isinstance(self.calc,EMT)):
+            atoms.set_calculator( self.calc)
+            dyn = BFGS(atoms)
+            dyn.run(steps=100, fmax=0.05)
+            E = atoms.get_potential_energy()
+            F = atoms.get_forces()
+            results = {'energy': E,'forces': F}
+        if(isinstance(self.calc,LAMMPSlib)):
+            try:
+                atoms.set_calculator(self.calc)
+                E = atoms.get_potential_energy()
+                F = atoms.get_forces()
+                results = {'energy': E,'forces': F}
+            except:
+                raise Exception("LAMMPS not installed")
+        else:
+            atoms.set_calculator(self.calc)
+            atoms.get_potential_energy()
+            E = atoms.get_potential_energy()
+            F = atoms.get_forces()
+            results = {'energy': E,'forces': F}
+        if(results is not None):
+            calc_sp = SinglePointCalculator(atoms, **results)
+            atoms.set_calculator(calc_sp)
+            self.append_to_file(atoms)
+            return atoms
+        else:
+            return None
