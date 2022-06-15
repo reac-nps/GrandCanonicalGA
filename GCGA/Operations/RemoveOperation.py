@@ -1,52 +1,104 @@
-
+import random
 import numpy as np
 
-from .OperationsBase import OperationsBase
-class RemoveOperation(OperationsBase):
-    """
-    Modified cross operation found in the Atomic Simulation Environment (ASE) GA package. ga.cutandspliceparing.py
-    Modified in order to allow the cut and splice pairing to happen between neighboring stoichiometries
-    """
+from .MutationsBase import MutationsBase
+class RemoveOperation(MutationsBase):
+
     def __init__(self, slab,variable_types,variable_range,ratio_of_covalent_radii=0.7,
-                rng=np.random):
+            rng=np.random,jump_to_any = True):
         super().__init__(slab,variable_types,variable_range,ratio_of_covalent_radii,rng)
-
-   
-    def mutate(self, a1,a2):
-        super().mutate( a1,a2)
-        """If index is not provided removes a random atom of the variable type, If it is provided removes the atom at that index as long as its of variable type """
-
-        #check that a1 and a2 share a cell with initialized slef.slab
-        if(self.slab.get_cell().all() != a1.get_cell().all()):
-            raise ValueError('Different cell sizes found for slab and inputed structures')
-
-        # Only consider the atoms to optimize
-        a1 = a1[len(self.slab) :len(a1)]
         
+        self.combination_lens =  self.__get_lens()
+        self.jmp = jump_to_any
+
+    def mutate(self, a1):
+        super().mutate(a1)
+
+        resulting_lens = []
+        smallest_diff = 100
+        for i in range(len(self.combination_lens)):
+            if(len(a1[len(self.slab):]) > self.combination_lens[i]):
+                resulting_lens.append(i)
+                smallest_diff = min(smallest_diff,len(a1[len(self.slab):]) -self.combination_lens[i] )
+
+        if(len(resulting_lens) == 0): return None
+
+        if (not self.jmp):
+            for i in resulting_lens:
+                resulting_lens = [i for i in resulting_lens if smallest_diff == len(a1[len(self.slab):]) -self.combination_lens[i] ]
+
+        a1_copy = a1.copy()
+        a1_copy = a1_copy[len(self.slab):]
+
         counter = 0
         maxcount = 1000
-        a1_copy = a1.copy()
-
-        poppable_indices = np.array([ a for a in np.arange(len(a1))])
         # Run until a valid pairing is made or maxcount pairings are tested.
         while counter < maxcount:
             counter += 1
-            
-            child = a1_copy.copy()
-            pop_int = self.rng.randint(0,len(poppable_indices)-1)
-            rand_atm = poppable_indices[pop_int]
-            
-            child.pop(poppable_indices[rand_atm])
 
-            atoms  = self.slab.copy()
-
-            atoms.extend(child)
-
-            # Passed all the tests
-            atoms.wrap()
-            var_id = self.get_var_id(atoms)
-            if(var_id is None):
+            random.shuffle(resulting_lens)
+            child = self.remove(a1_copy,resulting_lens[0])
+            if(child is None):
                 continue
-            atoms.info['stc']= var_id
-            return atoms,1
-        return None,1
+            
+            return_atoms = self.slab.copy()
+
+            return_atoms.extend(self.sort_atoms_by_type(child))
+            
+            if(self._check_overlap_all_atoms(return_atoms,self.blmin)):
+                continue
+            
+            var_id = self.get_var_id(return_atoms)
+            if(var_id is not None):
+                return_atoms.info['stc']= var_id
+               
+                return return_atoms
+            else:
+                raise Exception("Provided atomic combination is not present in combination matrix")
+            
+
+    def remove(self,atoms,target_comb):
+        combination = None
+        try:
+            combination = self.combination_matrix[target_comb]
+        except:
+            return None
+
+        if(combination is None): return None
+        indices = np.array([ a for a in np.arange(len(atoms))])
+
+        new_numbers = []
+        
+        for k in range(len(combination)):
+            for i in range(combination[k]):
+                new_numbers.extend(self.variable_types[k].numbers)
+                    
+        final_indices = []
+        random.shuffle(indices)
+        for i in new_numbers:
+            added = False
+            for j in indices:
+                if j not in final_indices and not added:
+                    if(i == atoms[j].number):
+                        final_indices.append(j)
+                        added = True
+        
+        if(self.__get_len(combination) != len(new_numbers)): return None
+        final_indices = np.array(final_indices)
+        return atoms[final_indices].copy()
+
+
+    def __get_len(self,comb):
+            sums  = 0
+            for k in range(len(comb)):
+                sums+=comb[k] * len(self.variable_types[k])
+            return sums
+    def __get_lens(self):
+        lens = []
+
+        for i in range(len(self.combination_matrix)):
+            sums  = 0
+            for k in range(len(self.combination_matrix[i])):
+                sums+=self.combination_matrix[i][k] * len(self.variable_types[k])
+            lens.append(sums)
+        return list(lens)

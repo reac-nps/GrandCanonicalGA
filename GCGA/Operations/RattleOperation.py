@@ -1,13 +1,12 @@
+import random
 import numpy as np
-from ase.ga.utilities import atoms_too_close
+from ase.io import write
 
-from .OperationsBase import OperationsBase
-class RattleOperation(OperationsBase):
-    """Rattle operation
-    
-        If Strict is true, will only return an atoms object if the number of atoms indicated in n_to_move have been succesfully rattled
-        Else will return an atoms object if at least one of the atoms has been rattled
-    """
+
+from .MutationsBase import MutationsBase
+class RattleOperation(MutationsBase):
+
+
     def __init__(self, slab,variable_types,variable_range,n_to_move =1,ratio_of_covalent_radii=0.7,
             rng=np.random,strict = False,rattle_strength = 1.0):
         super().__init__(slab,variable_types,variable_range,ratio_of_covalent_radii,rng)
@@ -15,66 +14,72 @@ class RattleOperation(OperationsBase):
         self.n_to_move = n_to_move
         self.strict = strict
         self.rattle_strength = rattle_strength
-    
+
+    def mutate(self, a1):
+        super().mutate(a1)
+       
+
+        unique_types =[]
+        for a in a1.numbers:
+            if(a not in unique_types):
+                unique_types.append(a)
+
+        a1_copy = a1.copy()
+        a1_copy = a1_copy[len(self.slab) :len(a1_copy)]
 
 
-    def mutate(self, a1, a2):
-        super().mutate(a1,a2)
-
-        if(self.slab.get_cell().all() != a1.get_cell().all()):
-            raise ValueError('Different cell sizes found for slab and inputed structures')
-
-        # Only consider the atoms to optimize
-        a1 = a1[len(self.slab) :len(a1)]
-
-        return_atoms = a1
-        
-        maxtries = 100
         n_moved = self.n_to_move
         if(self.n_to_move > len(a1)):
             print("Rattle operation being performed on all atoms of structure")
             n_moved = len(a1)
 
-        displaced_atoms = []
+        counter = 0
+        maxcount = 1000
+        
+        # Run until a valid pairing is made or maxcount pairings are tested.
+        while counter < maxcount:
+            counter += 1
 
-        while len(displaced_atoms) != n_moved:
-            pos = self.rng.randint(0,len(a1)-1)
-            if(pos not in displaced_atoms):
-                displaced_atoms.append(pos)
-        success = 0 
+            displaced_atoms = []
+            while len(displaced_atoms) != n_moved:
+                pos = self.rng.randint(0,len(a1)-1)
+                if(pos not in displaced_atoms):
+                    displaced_atoms.append(pos)
 
-        for i in displaced_atoms:
-            atoms = None
-            count = 0
-            while atoms == None and count < maxtries: 
-                count += 1
-                atoms = self.rattle_operation(return_atoms, i)
+            random.shuffle(displaced_atoms)
 
-                ats = self.slab.copy()
-
-                atoms.extend(self.slab.copy())
-
-                if atoms_too_close(ats, self.blmin):
-                    atoms = None
-
-            if atoms != None:
-                success += 1
-                return_atoms = atoms.copy()
-
-        var_id = self.get_var_id(return_atoms)
-        if var_id is None:
-            return None,1
+            displaced = False
+            child = a1_copy.copy()
+            for i in displaced_atoms:
+                rattled = False
+                tries = 0
+                while tries < 10 and rattled == False:
+                    tries+= 1
+                    atoms = self.rattle_operation(child,i)
+                    if(atoms is not None):
+                        atoverlaps = self._check_index_overlaps(i,atoms,self.blmin)
+                        self._displace(i,atoverlaps,atoms)
+                        if(len(atoverlaps) == 0): 
+                            rattled = True
+                            displaced = True
+                            child = atoms.copy()
             
-        return_atoms.info['stc'] = var_id
-        if(self.strict):
-            if(success == n_moved):
-                return return_atoms,1
-            return None,1
-        else:
-            if(success == 0):
-                return None,1
-            return return_atoms,1
-       
+            if(displaced == False): continue
+            return_atoms = self.slab.copy()
+
+            return_atoms.extend(self.sort_atoms_by_type(child))
+            
+            if(self._check_overlap_all_atoms(return_atoms,self.blmin)):
+                continue
+            
+            var_id = self.get_var_id(return_atoms)
+            if(var_id is not None):
+                return_atoms.info['stc']= var_id
+                return return_atoms
+            else:
+                raise Exception("Provided atomic combination is not present in combination matrix")
+                
+
     def rattle_operation(self,atoms, position):
 
         at = atoms.copy()
@@ -83,20 +88,18 @@ class RattleOperation(OperationsBase):
 
         cm = at.get_center_of_mass(scaled = True)
         at_pos = at[position].scaled_position
-    
+
         x = (self.rattle_strength * self.rng.rand()+at_pos[0]) % 1.0
         y = (self.rattle_strength * self.rng.rand()+at_pos[1]) % 1.0
         z = (self.rattle_strength * self.rng.rand()+at_pos[2]) % 1.0
 
         new_pos = np.array([x,y,z])
         if( -np.dot(np.linalg.norm(at_pos - cm ),np.linalg.norm(new_pos-at_pos)) > self.rng.rand() ):
-            print("None2")
             return None
         
         if (len(self.slab )> 0 ):
             slab_cm = self.slab.get_center_of_mass(scaled = True)
             if not (self.rng.rand() > np.dot(np.linalg.norm(slab_cm - cm),np.linalg.norm(new_pos -cm))):
-                print("None")
                 return None
             at[position].scaled_position = new_pos
             return at
@@ -104,4 +107,4 @@ class RattleOperation(OperationsBase):
         at[position].scaled_position = new_pos
         return at
 
-        
+    

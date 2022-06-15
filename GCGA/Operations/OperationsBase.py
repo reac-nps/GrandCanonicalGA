@@ -1,15 +1,17 @@
 
 
-from abc import ABC,abstractmethod
+from abc import ABC
 from turtle import Turtle
 from typing import List, Dict, Any
 import hashlib
 import json
 from ..CoreUtils.NumpyArrayEncoder import NumpyArrayEncoder
+from ..CoreUtils.SubunitAnalysis import NonEnergyInteratomicDistanceComparator
 import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers
-from ase.ga.utilities import (closest_distances_generator, get_all_atom_types)
+from ase.ga.utilities import closest_distances_generator,get_all_atom_types
+
 
 class OperationsBase(ABC):
     """
@@ -28,15 +30,6 @@ class OperationsBase(ABC):
 
         self.blmin = self.__set_blmin(slab, variable_types)
 
-    @classmethod
-    def mutation_class(self):
-        return True
-    def mutation_instance(self):
-        return True
-
-    @abstractmethod
-    def mutate(self, a1, a2):
-        pass
 
     def mantains_ordering(self,atoms):
         if(len(atoms) < len(self.slab)):
@@ -80,8 +73,8 @@ class OperationsBase(ABC):
                         ats.extend(self.variable_types[i].copy())
                 variable_id = x+1
                 symbol_dictionary[self.atoms_to_hash(ats)] = variable_id
-
             return symbol_dictionary
+
         except:
             raise Exception("Could not generate variable dictionary: Make sure variable type length and variable range length match")
 
@@ -149,5 +142,31 @@ class OperationsBase(ABC):
         return closest_distances_generator(atom_numbers=unique_atom_types,
                                     ratio_of_covalent_radii=self.ratio_of_covalent_radii)
 
+    def sort_atoms_by_type(self,atoms):
+        at = Atoms()
+        for i in self.variable_types:
+            for k in i:
+                for j in atoms:
+                    if(k.symbol == j.symbol):
+                        at.extend(j)
+        return at
 
-    
+    def is_structure_equal(self,atoms1,atoms2):
+        if(len(atoms1) != len(atoms2)): return False
+        
+        comp = NonEnergyInteratomicDistanceComparator(n_top=len(atoms1), pair_cor_cum_diff=0.015,
+                pair_cor_max=0.7, mic=True)
+        return comp.looks_like(atoms1,atoms2)
+    def _check_overlap_all_atoms(self,atoms,blmin):
+        indices = np.array([ a for a in np.arange(len(atoms))])
+        for i in indices:
+            for j in indices:
+                if(i != j):
+                    if(not self._check_overlap(atoms[i],atoms[j],blmin[(atoms[i].number,atoms[j].number)])):
+                        return True
+        return False
+    def _check_overlap(self,atom1,atom2,dist):
+        return dist*dist < ((atom1.position[0]-atom2.position[0]) * (atom1.position[0]-atom2.position[0]) +
+                            (atom1.position[1]-atom2.position[1]) * (atom1.position[1]-atom2.position[1]) +
+                            (atom1.position[2]-atom2.position[2]) * (atom1.position[2]-atom2.position[2]))
+

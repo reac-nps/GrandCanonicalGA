@@ -1,14 +1,14 @@
 #Import these for the GA code to run
 
-from GCGA.CoreUtils.GCGA import GCGA
+from GCGA.GCGA import GCGA
 from GCGA.Operations.CrossOperation import CrossOperation as CO
-from GCGA.Operations.OperationsBase import OperationsBase
+from GCGA.Operations.MutationsBase import OperationsBase
 from GCGA.Operations.RandomCandidateGenerator import RandomCandidateGenerator as RCG
-from GCGA.Operations.AddOperation import AddOperation as AD
+"""from GCGA.Operations.AddOperation import AddOperation as AD
 from GCGA.Operations.RemoveOperation import RemoveOperation as RM
 from GCGA.Operations.PermutationOperation import PermutationOperation as PM
 from GCGA.Operations.RattleOperation import RattleOperation as RT
-
+"""
 from ase import Atoms
 import numpy as np
 ###########################
@@ -81,7 +81,7 @@ cmds = ["pair_style reaxff",
 lammps = LAMMPSlib(lmpcmds=cmds, log_file='test.log')
 
 #Instantiating of the GCGA object with the selected parameters
-gcga = GCGA(slab,variable_types,variable_range,mutations,chances,fitness_function,starting_population=5,calculator = lammps,steps= 10)
+gcga = GCGA(slab,variable_types,variable_range,mutations,chances,fitness_function,calculator = lammps,steps= 10)
 
 #Calling the run function will initialize the run
 gcga.run()
